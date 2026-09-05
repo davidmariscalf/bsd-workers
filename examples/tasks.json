@@ -1,0 +1,26 @@
+[
+  {
+    "id": "self-test",
+    "type": "self_test",
+    "params": {}
+  },
+  {
+    "id": "prime-candidate",
+    "type": "prime_test",
+    "params": {
+      "n": "27556875248067978887984387004542711"
+    }
+  },
+  {
+    "id": "3954c1-summary",
+    "type": "ec_summary",
+    "params": {
+      "label": "3954c1",
+      "operations": [
+        "rank_bounds",
+        "torsion_order",
+        "root_number"
+      ]
+    }
+  }
+]
