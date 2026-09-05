@@ -43,16 +43,20 @@ $gh = Read-Host "GitHub token" -AsSecureString
 Write-Host "Paste the GitLab project/personal access token when prompted. It will NOT be shown."
 $gl = Read-Host "GitLab token" -AsSecureString
 
+# Windows PowerShell 5.x may not preload the assembly that contains ProtectedData,
+# especially in non-interactive SYSTEM sessions.
+Add-Type -AssemblyName System.Security
+
 function Protect-MachineSecureString([Security.SecureString]$Secure) {
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
     $bytes = $null
     try {
         $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
         $bytes = [Text.Encoding]::UTF8.GetBytes($plain)
-        $protected = [Security.Cryptography.ProtectedData]::Protect(
+        $protected = [System.Security.Cryptography.ProtectedData]::Protect(
             $bytes,
             $null,
-            [Security.Cryptography.DataProtectionScope]::LocalMachine
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
         )
         return [Convert]::ToBase64String($protected)
     }
@@ -76,14 +80,18 @@ $cfg | ConvertTo-Json | Set-Content -Path $SecretsPath -Encoding UTF8
 
 $loader = @'
 $ErrorActionPreference = "Stop"
+
+# Required by Windows PowerShell 5.x under non-interactive SYSTEM sessions.
+Add-Type -AssemblyName System.Security
+
 $cfg = Get-Content "C:\bsd-mcp\bsd_ci_secrets.json" -Raw | ConvertFrom-Json
 
 function Unprotect-MachineSecret([string]$Encrypted) {
     $protected = [Convert]::FromBase64String($Encrypted)
-    $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(
+    $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
         $protected,
         $null,
-        [Security.Cryptography.DataProtectionScope]::LocalMachine
+        [System.Security.Cryptography.DataProtectionScope]::LocalMachine
     )
     try {
         return [Text.Encoding]::UTF8.GetString($plainBytes)
