@@ -1,0 +1,37 @@
+name: Validate worker integrations
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "*.py"
+      - ".circleci/**"
+      - ".gitlab-ci.yml"
+      - "oracle/**"
+      - ".github/workflows/validate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile Python adapters
+        run: python3 -m py_compile ci_entrypoint.py provider_dispatch.py oracle_dispatch.py prepare_matrix.py
+
+      - name: Validate shell scripts
+        run: bash -n oracle/run_task.sh
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.2"
+
+      - name: Check Terraform formatting
+        run: terraform -chdir=oracle fmt -check -recursive
