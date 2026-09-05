@@ -1,0 +1,44 @@
+version: 2.1
+
+parameters:
+  workers:
+    type: integer
+    default: 1
+  tasks_b64:
+    type: string
+    default: "W3siaWQiOiJzZWxmLXRlc3QiLCJ0eXBlIjoic2VsZl90ZXN0IiwicGFyYW1zIjp7fX1d"
+
+jobs:
+  bsd-workers:
+    parameters:
+      worker_count:
+        type: integer
+        default: 1
+      tasks_b64:
+        type: string
+    docker:
+      - image: sagemath/sagemath:10.9
+    resource_class: medium
+    parallelism: << parameters.worker_count >>
+    environment:
+      BSD_PROVIDER: circleci
+      BSD_RESULTS_DIR: results
+    steps:
+      - checkout
+      - run:
+          name: Run BSD worker shard
+          environment:
+            BSD_TASKS_B64: << parameters.tasks_b64 >>
+          command: |
+            mkdir -p results
+            sage -python ci_entrypoint.py
+      - store_artifacts:
+          path: results
+          destination: bsd-results
+
+workflows:
+  bsd-workers:
+    jobs:
+      - bsd-workers:
+          worker_count: << pipeline.parameters.workers >>
+          tasks_b64: << pipeline.parameters.tasks_b64 >>
