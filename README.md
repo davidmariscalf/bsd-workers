@@ -1,22 +1,25 @@
 # BSD Workers
 
-Ephemeral SageMath workers for the BSD project. The repository is intentionally public so standard GitHub-hosted Actions runners do not consume paid Actions minutes.
+Free / no-cost worker pool for the BSD project, designed to extend the existing `bsd_lab_controller_v3` rather than replace it with another scheduler.
 
-## Architecture
+## Providers
 
-- One workflow run accepts up to **30 independent tasks**.
-- GitHub Actions fans them out with a matrix and `max-parallel: 30`.
-- Each task runs in the official `sagemath/sagemath:latest` Docker image.
-- Each worker has a hard workflow timeout of **120 minutes**.
-- Every task produces a JSON artifact named `bsd-result-<task-id>`.
-- `fail-fast` is disabled: one failed computation does not cancel the other workers.
-- The intended controller is `bsd_lab_controller_v3`: it should dispatch batches through GitHub `repository_dispatch` and collect the resulting artifacts. This extends the existing controller; it does not create a second scheduler.
+| Provider | Integration in this repo | State |
+| --- | --- | --- |
+| GitHub Actions | `.github/workflows/bsd-worker.yml` | **Active and tested** |
+| CircleCI | `.circleci/config.yml` | Configured; external CircleCI project authorization still required |
+| GitLab CI | `.gitlab-ci.yml` | Configured; GitLab project/mirror authorization still required |
+| Oracle Always Free | `oracle/` Terraform + SSH worker | Fully prepared; OCI account credentials and `terraform apply` still required |
 
-Actual simultaneous execution is still subject to GitHub's concurrency limit for the account. A 30-task batch therefore creates 30 worker jobs; if GitHub grants fewer than 30 simultaneous hosted runners, the rest queue automatically.
+The repository contains no provider tokens, OCI credentials, SSH private keys, or other secrets.
 
-## Dispatch payload
+## GitHub Actions
 
-Event type: `bsd_tasks`
+One workflow run accepts up to **30 independent tasks** and fans them out with a matrix using `max-parallel: 30`. Each worker runs in SageMath, has a 120-minute timeout, uploads a JSON result artifact, and uses `fail-fast: false` so one failed computation does not cancel the others.
+
+Actual simultaneous execution is controlled by GitHub's account concurrency limit. Excess jobs queue automatically.
+
+Event type for automated dispatch: `bsd_tasks`.
 
 ```json
 {
@@ -25,29 +28,79 @@ Event type: `bsd_tasks`
     "tasks": [
       {"id": "prime-1", "type": "prime_test", "params": {"n": "27556875248067978887984387004542711"}},
       {"id": "factor-1", "type": "factor_integer", "params": {"n": "2026"}},
-      {"id": "curve-1", "type": "ec_summary", "params": {"label": "3954c1", "operations": ["rank_bounds", "torsion_order", "root_number"]}},
-      {"id": "ff-1", "type": "finite_field_point_count", "params": {"p": 101, "a_invariants": [0, -1, 1, -10, -20]}}
+      {"id": "curve-1", "type": "ec_summary", "params": {"label": "3954c1", "operations": ["rank_bounds", "torsion_order", "root_number"]}}
     ]
   }
 }
 ```
 
-The `tasks` array may contain 1–30 items.
+## CircleCI
 
-## Supported tasks
+`.circleci/config.yml` uses a parameterized parallel SageMath job. The controller sends:
+
+- `workers`: number of tasks / workers to request
+- `tasks_b64`: base64-encoded JSON task array
+
+`ci_entrypoint.py` maps `CIRCLE_NODE_INDEX` to exactly one BSD task, so workers do not duplicate work. Results are stored as CircleCI artifacts.
+
+`provider_dispatch.py circleci tasks.json` is the controller-side API adapter. It expects:
+
+```text
+BSD_CIRCLECI_TOKEN
+BSD_CIRCLECI_PROJECT_SLUG
+BSD_CIRCLECI_BRANCH=main
+```
+
+## GitLab CI
+
+`.gitlab-ci.yml` uses typed pipeline inputs and sets `parallel` dynamically from the requested worker count. Push pipelines are disabled so a mirrored repository does not burn the free compute allowance just because GitHub receives a commit.
+
+`provider_dispatch.py gitlab tasks.json` expects:
+
+```text
+BSD_GITLAB_TOKEN
+BSD_GITLAB_PROJECT
+BSD_GITLAB_REF=main
+```
+
+The GitLab project value can be a numeric project ID or URL-encoded project path accepted by the API.
+
+## Oracle Always Free
+
+`oracle/` defines two persistent `VM.Standard.A1.Flex` ARM workers, each 1 OCPU / 6 GB RAM, for a combined 2 OCPUs / 12 GB. SageMath is installed through conda-forge because the official SageMath Docker image is currently amd64-only.
+
+Terraform creates the network, public subnet, SSH access, two VMs, and cloud-init bootstrap. See `oracle/README.md`.
+
+Once the two VM IPs exist, `oracle_dispatch.py` can feed them tasks over SSH in parallel using:
+
+```text
+BSD_ORACLE_HOSTS=<ip1>,<ip2>
+BSD_ORACLE_SSH_KEY=<private-key-path>
+BSD_ORACLE_SSH_USER=ubuntu
+```
+
+## Common task format
+
+All providers use the same task objects and the same `worker.py` implementation.
+
+Supported task types:
 
 - `self_test`
-- `prime_test` — parameter: `n`
-- `factor_integer` — parameter: `n`
+- `prime_test` — parameter `n`
+- `factor_integer` — parameter `n`
 - `ec_summary` — `label` or `a_invariants`; optional `operations`
-- `finite_field_point_count` — parameters: prime `p`, `a_invariants`
+- `finite_field_point_count` — prime `p` and `a_invariants`
 
 `ec_summary.operations` supports `a_invariants`, `discriminant`, `conductor`, `torsion_order`, `rank_bounds`, `rank`, `root_number`, and `analytic_rank`.
 
-## Result envelope
+Each result envelope contains task id/type, worker identity, provider/run metadata when available, timestamps, duration, success flag, and either a result or structured error.
 
-Each artifact contains JSON with task id/type, worker slot, GitHub run id, timestamps, duration, success flag, and either `result` or a structured error with traceback.
+## Controller integration
 
-## Manual test
+`provider_dispatch.py` provides API adapters for GitHub, CircleCI, and GitLab. `oracle_dispatch.py` handles the two persistent OCI machines via SSH.
 
-The workflow also supports `workflow_dispatch`. Leaving its default payload runs one SageMath self-test.
+The intended production path remains:
+
+`lab_enqueue -> SQLite work_queue -> BSD Lab Controller -> provider adapter -> worker -> result`
+
+This preserves the existing persistent queue and deduplication model instead of creating a competing scheduler.
