@@ -17,10 +17,6 @@ on:
         description: Short-lived HTTPS URL serving candidate tar.gz
         required: true
         type: string
-      result_url:
-        description: Short-lived HTTPS callback URL accepting result JSON
-        required: true
-        type: string
       payload_sha256:
         description: Expected SHA256 of candidate tar.gz
         required: true
@@ -33,6 +29,9 @@ on:
 permissions:
   contents: read
 
+env:
+  RESULT_ARTIFACT_PREFIX: candidate-test-result
+
 jobs:
   isolated-test:
     runs-on: ubuntu-latest
@@ -40,45 +39,49 @@ jobs:
 
     steps:
       - name: Execute isolated candidate test
+        id: test
         shell: bash
         env:
           CANDIDATE_ID: ${{ inputs.candidate_id }}
           RUN_TOKEN: ${{ inputs.run_token }}
           PAYLOAD_URL: ${{ inputs.payload_url }}
-          RESULT_URL: ${{ inputs.result_url }}
           PAYLOAD_SHA256: ${{ inputs.payload_sha256 }}
           IMAGE_REF: ${{ inputs.image_ref }}
         run: |
           set -u -o pipefail
 
-          python3 - <<'PY'
-          import re
+          mkdir -p work/candidate
+
+          INFRA_ERROR=""
+          TEST_EXIT=""
+          TIMED_OUT=false
+
+          if ! python3 - <<'PY'
           import os
-          import sys
+          import re
 
           cid = os.environ["CANDIDATE_ID"]
           token = os.environ["RUN_TOKEN"]
           payload_sha = os.environ["PAYLOAD_SHA256"].lower()
           image_ref = os.environ["IMAGE_REF"]
 
-          if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", cid):
-              raise SystemExit("invalid candidate_id")
-          if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", token):
-              raise SystemExit("invalid run_token")
-          if not re.fullmatch(r"[0-9a-f]{64}", payload_sha):
-              raise SystemExit("invalid payload_sha256")
-          if not re.fullmatch(r"sagemath/sagemath@sha256:[0-9a-f]{64}", image_ref):
-              raise SystemExit("image_ref must be a pinned sagemath/sagemath repo digest")
+          assert re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", cid), "invalid candidate_id"
+          assert re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", token), "invalid run_token"
+          assert re.fullmatch(r"[0-9a-f]{64}", payload_sha), "invalid payload_sha256"
+          assert re.fullmatch(
+              r"sagemath/sagemath@sha256:[0-9a-f]{64}", image_ref
+          ), "image_ref must be pinned"
           PY
+          then
+            INFRA_ERROR="INPUT_VALIDATION_FAILED"
+          fi
 
-          mkdir -p work/candidate
-
-          INFRA_ERROR=""
-
-          if ! curl --fail --silent --show-error --location \
-              --connect-timeout 15 --max-time 60 \
-              "$PAYLOAD_URL" -o work/candidate.tar.gz; then
-            INFRA_ERROR="PAYLOAD_DOWNLOAD_FAILED"
+          if [ -z "$INFRA_ERROR" ]; then
+            if ! curl --fail --silent --show-error --location \
+                --connect-timeout 15 --max-time 60 \
+                "$PAYLOAD_URL" -o work/candidate.tar.gz; then
+              INFRA_ERROR="PAYLOAD_DOWNLOAD_FAILED"
+            fi
           fi
 
           if [ -z "$INFRA_ERROR" ]; then
@@ -90,7 +93,6 @@ jobs:
 
           if [ -z "$INFRA_ERROR" ]; then
             if ! python3 - <<'PY'
-          import os
           import tarfile
           from pathlib import Path
 
@@ -103,10 +105,10 @@ jobs:
                   raise SystemExit("empty candidate archive")
               for member in members:
                   if member.issym() or member.islnk():
-                      raise SystemExit("links are not allowed in candidate archive")
+                      raise SystemExit("links are not allowed")
                   destination = (target / member.name).resolve()
                   if destination != target and target not in destination.parents:
-                      raise SystemExit("candidate archive path traversal")
+                      raise SystemExit("archive path traversal")
               tf.extractall(target, members=members)
           PY
             then
@@ -119,9 +121,6 @@ jobs:
               INFRA_ERROR="PINNED_IMAGE_PULL_FAILED"
             fi
           fi
-
-          TEST_EXIT=""
-          TIMED_OUT=false
 
           if [ -z "$INFRA_ERROR" ]; then
             set +e
@@ -154,8 +153,8 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          from pathlib import Path
           from datetime import datetime, timezone
+          from pathlib import Path
 
           infra = os.environ.get("INFRA_ERROR", "")
           raw_exit = os.environ.get("TEST_EXIT", "")
@@ -214,6 +213,7 @@ jobs:
               json.dumps(result, indent=2, sort_keys=True),
               encoding="utf-8",
           )
+
           print(json.dumps({
               "classification": classification,
               "status": status,
@@ -221,20 +221,6 @@ jobs:
               "github_run_id": result["github_run_id"],
           }, sort_keys=True))
           PY
-
-          CALLBACK_OK=true
-          if ! curl --fail --silent --show-error \
-              --connect-timeout 15 --max-time 60 \
-              -H 'Content-Type: application/json' \
-              --data-binary @work/result.json \
-              "$RESULT_URL" >/dev/null; then
-            CALLBACK_OK=false
-          fi
-
-          if [ "$CALLBACK_OK" != true ]; then
-            echo "Result callback failed" >&2
-            exit 90
-          fi
 
           if [ -n "$INFRA_ERROR" ]; then
             exit 80
@@ -244,4 +230,11 @@ jobs:
             exit "$TEST_EXIT"
           fi
 
-          exit 0
+      - name: Upload isolated result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-test-result-${{ inputs.run_token }}
+          path: work/result.json
+          if-no-files-found: error
+          retention-days: 1
