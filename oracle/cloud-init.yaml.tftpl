@@ -1,0 +1,18 @@
+#cloud-config
+package_update: true
+packages:
+  - git
+  - curl
+  - ca-certificates
+  - bzip2
+
+runcmd:
+  - curl -L -o /tmp/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh
+  - bash /tmp/miniforge.sh -b -p /opt/conda
+  - /opt/conda/bin/conda create -y -p /opt/sage -c conda-forge sage
+  - git clone ${repo_url} /opt/bsd-workers
+  - mkdir -p /opt/bsd-results
+  - chmod +x /opt/bsd-workers/oracle/run_task.sh
+  - ln -sf /opt/bsd-workers/oracle/run_task.sh /usr/local/bin/bsd-run-task
+  - chown -R ubuntu:ubuntu /opt/bsd-workers /opt/bsd-results
+  - touch /opt/bsd-ready
