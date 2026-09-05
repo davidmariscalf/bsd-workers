@@ -5,6 +5,7 @@ import json
 import os
 import urllib.parse
 import urllib.request
+import uuid
 
 MAX_TASKS = 30
 
@@ -33,9 +34,14 @@ def request_json(url, *, method="POST", headers=None, payload=None):
         return resp.status, json.loads(body) if body else {}
 
 
+def _batch_id():
+    return "manual-" + uuid.uuid4().hex[:16]
+
+
 def dispatch_github(tasks):
     token = os.environ["BSD_GITHUB_TOKEN"]
     repo = os.environ.get("BSD_GITHUB_REPO", "davidmariscalf/bsd-workers")
+    batch_id = _batch_id()
     url = f"https://api.github.com/repos/{repo}/dispatches"
     status, body = request_json(
         url,
@@ -43,9 +49,17 @@ def dispatch_github(tasks):
             "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": "2022-11-28",
         },
-        payload={"event_type": "bsd_tasks", "client_payload": {"tasks": tasks}},
+        payload={
+            "event_type": "bsd_tasks",
+            "client_payload": {"batch_id": batch_id, "tasks": tasks},
+        },
     )
-    return {"provider": "github", "status": status, "response": body}
+    return {
+        "provider": "github",
+        "batch_id": batch_id,
+        "status": status,
+        "response": body,
+    }
 
 
 def dispatch_circleci(tasks):
@@ -68,6 +82,7 @@ def dispatch_gitlab(tasks):
     token = os.environ["BSD_GITLAB_TOKEN"]
     project = os.environ["BSD_GITLAB_PROJECT"]
     ref = os.environ.get("BSD_GITLAB_REF", "main")
+    batch_id = _batch_id()
     project_q = urllib.parse.quote(project, safe="")
     tasks_b64 = base64.b64encode(json.dumps(tasks, separators=(",", ":")).encode()).decode()
     url = f"https://gitlab.com/api/v4/projects/{project_q}/pipeline?ref={urllib.parse.quote(ref)}"
@@ -76,7 +91,12 @@ def dispatch_gitlab(tasks):
         headers={"PRIVATE-TOKEN": token},
         payload={"inputs": {"workers": len(tasks), "tasks_b64": tasks_b64}},
     )
-    return {"provider": "gitlab", "status": status, "response": body}
+    return {
+        "provider": "gitlab",
+        "batch_id": batch_id,
+        "status": status,
+        "response": body,
+    }
 
 
 def main():
