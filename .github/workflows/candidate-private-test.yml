@@ -1,0 +1,247 @@
+name: Private candidate isolated test
+
+run-name: "candidate-${{ inputs.candidate_id }}-${{ inputs.run_token }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_id:
+        description: Candidate identifier
+        required: true
+        type: string
+      run_token:
+        description: Unique non-secret run identifier
+        required: true
+        type: string
+      payload_url:
+        description: Short-lived HTTPS URL serving candidate tar.gz
+        required: true
+        type: string
+      result_url:
+        description: Short-lived HTTPS callback URL accepting result JSON
+        required: true
+        type: string
+      payload_sha256:
+        description: Expected SHA256 of candidate tar.gz
+        required: true
+        type: string
+      image_ref:
+        description: Pinned SageMath image repo digest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Execute isolated candidate test
+        shell: bash
+        env:
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          RUN_TOKEN: ${{ inputs.run_token }}
+          PAYLOAD_URL: ${{ inputs.payload_url }}
+          RESULT_URL: ${{ inputs.result_url }}
+          PAYLOAD_SHA256: ${{ inputs.payload_sha256 }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+        run: |
+          set -u -o pipefail
+
+          python3 - <<'PY'
+          import re
+          import os
+          import sys
+
+          cid = os.environ["CANDIDATE_ID"]
+          token = os.environ["RUN_TOKEN"]
+          payload_sha = os.environ["PAYLOAD_SHA256"].lower()
+          image_ref = os.environ["IMAGE_REF"]
+
+          if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", cid):
+              raise SystemExit("invalid candidate_id")
+          if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", token):
+              raise SystemExit("invalid run_token")
+          if not re.fullmatch(r"[0-9a-f]{64}", payload_sha):
+              raise SystemExit("invalid payload_sha256")
+          if not re.fullmatch(r"sagemath/sagemath@sha256:[0-9a-f]{64}", image_ref):
+              raise SystemExit("image_ref must be a pinned sagemath/sagemath repo digest")
+          PY
+
+          mkdir -p work/candidate
+
+          INFRA_ERROR=""
+
+          if ! curl --fail --silent --show-error --location \
+              --connect-timeout 15 --max-time 60 \
+              "$PAYLOAD_URL" -o work/candidate.tar.gz; then
+            INFRA_ERROR="PAYLOAD_DOWNLOAD_FAILED"
+          fi
+
+          if [ -z "$INFRA_ERROR" ]; then
+            ACTUAL_SHA="$(sha256sum work/candidate.tar.gz | awk '{print $1}')"
+            if [ "$ACTUAL_SHA" != "$PAYLOAD_SHA256" ]; then
+              INFRA_ERROR="PAYLOAD_SHA256_MISMATCH"
+            fi
+          fi
+
+          if [ -z "$INFRA_ERROR" ]; then
+            if ! python3 - <<'PY'
+          import os
+          import tarfile
+          from pathlib import Path
+
+          archive = Path("work/candidate.tar.gz")
+          target = Path("work/candidate").resolve()
+
+          with tarfile.open(archive, "r:gz") as tf:
+              members = tf.getmembers()
+              if not members:
+                  raise SystemExit("empty candidate archive")
+              for member in members:
+                  if member.issym() or member.islnk():
+                      raise SystemExit("links are not allowed in candidate archive")
+                  destination = (target / member.name).resolve()
+                  if destination != target and target not in destination.parents:
+                      raise SystemExit("candidate archive path traversal")
+              tf.extractall(target, members=members)
+          PY
+            then
+              INFRA_ERROR="SAFE_EXTRACTION_FAILED"
+            fi
+          fi
+
+          if [ -z "$INFRA_ERROR" ]; then
+            if ! docker pull "$IMAGE_REF" >/dev/null; then
+              INFRA_ERROR="PINNED_IMAGE_PULL_FAILED"
+            fi
+          fi
+
+          TEST_EXIT=""
+          TIMED_OUT=false
+
+          if [ -z "$INFRA_ERROR" ]; then
+            set +e
+            timeout --signal=KILL 180s docker run --rm \
+              --network none \
+              --read-only \
+              --pids-limit 256 \
+              --memory 3g \
+              --cpus 2 \
+              --user 1000:1000 \
+              -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+              --tmpfs /tmp:rw,noexec,nosuid,size=256m \
+              -v "$PWD/work/candidate:/candidate:ro" \
+              -w /candidate \
+              "$IMAGE_REF" \
+              sage -python -m pytest -q \
+              >work/stdout.txt 2>work/stderr.txt
+            TEST_EXIT=$?
+            set -e
+
+            if [ "$TEST_EXIT" -eq 124 ] || [ "$TEST_EXIT" -eq 137 ]; then
+              TIMED_OUT=true
+            elif [ "$TEST_EXIT" -eq 125 ] || [ "$TEST_EXIT" -eq 126 ] || [ "$TEST_EXIT" -eq 127 ]; then
+              INFRA_ERROR="DOCKER_EXECUTION_FAILED_${TEST_EXIT}"
+            fi
+          fi
+
+          export INFRA_ERROR TEST_EXIT TIMED_OUT
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from datetime import datetime, timezone
+
+          infra = os.environ.get("INFRA_ERROR", "")
+          raw_exit = os.environ.get("TEST_EXIT", "")
+          test_exit = int(raw_exit) if raw_exit else None
+          timed_out = os.environ.get("TIMED_OUT", "false").lower() == "true"
+
+          def read_text(path):
+              p = Path(path)
+              if not p.exists():
+                  return ""
+              text = p.read_text(encoding="utf-8", errors="replace")
+              limit = 1_000_000
+              return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
+
+          if infra:
+              classification = "INFRA_FAILURE"
+              status = "INFRA_FAILURE"
+              technical_failure = True
+          elif test_exit == 0:
+              classification = "PASS"
+              status = "TEST_PASSED"
+              technical_failure = False
+          else:
+              classification = "QUALITY_FAILURE"
+              status = "TEST_FAILED"
+              technical_failure = False
+
+          result = {
+              "version": "BSD_GITHUB_CANDIDATE_TEST_RESULT_V1",
+              "candidate_id": os.environ["CANDIDATE_ID"],
+              "run_token": os.environ["RUN_TOKEN"],
+              "provider": "github_actions",
+              "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "classification": classification,
+              "status": status,
+              "exit_code": test_exit,
+              "timed_out": timed_out,
+              "technical_failure": technical_failure,
+              "infra_error": infra or None,
+              "stdout": read_text("work/stdout.txt"),
+              "stderr": read_text("work/stderr.txt"),
+              "backend": "github_actions_docker",
+              "image_ref": os.environ["IMAGE_REF"],
+              "network_disabled": True,
+              "rootfs_readonly": True,
+              "candidate_mount_readonly": True,
+              "non_root": True,
+              "production_active": False,
+              "automatically_promoted": False,
+              "mathematical_certification": False,
+              "finished_at": datetime.now(timezone.utc).isoformat(),
+          }
+
+          Path("work/result.json").write_text(
+              json.dumps(result, indent=2, sort_keys=True),
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "classification": classification,
+              "status": status,
+              "candidate_id": result["candidate_id"],
+              "github_run_id": result["github_run_id"],
+          }, sort_keys=True))
+          PY
+
+          CALLBACK_OK=true
+          if ! curl --fail --silent --show-error \
+              --connect-timeout 15 --max-time 60 \
+              -H 'Content-Type: application/json' \
+              --data-binary @work/result.json \
+              "$RESULT_URL" >/dev/null; then
+            CALLBACK_OK=false
+          fi
+
+          if [ "$CALLBACK_OK" != true ]; then
+            echo "Result callback failed" >&2
+            exit 90
+          fi
+
+          if [ -n "$INFRA_ERROR" ]; then
+            exit 80
+          fi
+
+          if [ "${TEST_EXIT:-1}" -ne 0 ]; then
+            exit "$TEST_EXIT"
+          fi
+
+          exit 0
