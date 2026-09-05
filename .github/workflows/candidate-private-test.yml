@@ -130,7 +130,7 @@ jobs:
               --pids-limit 256 \
               --memory 3g \
               --cpus 2 \
-              --user 1000:1000 \
+              --user sage \
               -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
               --tmpfs /tmp:rw,noexec,nosuid,size=256m \
               -v "$PWD/work/candidate:/candidate:ro" \
