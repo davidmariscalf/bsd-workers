@@ -10,7 +10,9 @@ MAX_TASKS = 30
 
 
 def load_tasks(path):
-    with open(path, "r", encoding="utf-8") as fh:
+    # utf-8-sig accepts ordinary UTF-8 and also strips the BOM written by
+    # Windows PowerShell 5.x when Set-Content -Encoding UTF8 is used.
+    with open(path, "r", encoding="utf-8-sig") as fh:
         tasks = json.load(fh)
     if not isinstance(tasks, list) or not tasks:
         raise ValueError("Task file must contain a non-empty JSON array")
