@@ -1,4 +1,5 @@
 name: BSD workers
+run-name: "BSD ${{ github.event.client_payload.batch_id || github.event_name }}"
 
 on:
   workflow_dispatch:
@@ -57,6 +58,7 @@ jobs:
           BSD_TASK_JSON: ${{ toJSON(matrix.task) }}
           BSD_WORKER_ID: ${{ matrix.slot }}
           BSD_RESULT_PATH: results/${{ matrix.task_id }}.json
+          BSD_PROVIDER: github
         run: |
           mkdir -p results
           docker run --rm --user 0:0 \
@@ -65,6 +67,7 @@ jobs:
             -e BSD_TASK_JSON \
             -e BSD_WORKER_ID \
             -e BSD_RESULT_PATH \
+            -e BSD_PROVIDER \
             -e GITHUB_RUN_ID \
             -e GITHUB_RUN_ATTEMPT \
             sagemath/sagemath:latest \
