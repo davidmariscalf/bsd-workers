@@ -34,4 +34,6 @@ jobs:
           terraform_version: "1.13.2"
 
       - name: Check Terraform formatting
-        run: terraform -chdir=oracle fmt -check -recursive
+        run: |
+          terraform -chdir=oracle fmt -recursive
+          git diff --exit-code -- oracle
