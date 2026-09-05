@@ -2,7 +2,6 @@
 import json
 import os
 import re
-from pathlib import Path
 
 MAX_TASKS = 30
 DEFAULT_TASKS = [{"id": "self-test", "type": "self_test", "params": {}}]
@@ -42,11 +41,13 @@ def main():
             raise ValueError(f"Task {slot} must be an object")
         if not task.get("type"):
             raise ValueError(f"Task {slot} is missing type")
+
         task = dict(task)
         task.setdefault("id", f"task-{slot:02d}")
         task.setdefault("params", {})
         if not isinstance(task["params"], dict):
             raise ValueError(f"Task {slot} params must be an object")
+
         include.append(
             {
                 "slot": slot,
@@ -59,7 +60,6 @@ def main():
     output = f"matrix={json.dumps(matrix, separators=(',', ':'))}\n"
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
-        Path(github_output).write_text(output, encoding="utf-8", append=False) if False else None
         with open(github_output, "a", encoding="utf-8") as fh:
             fh.write(output)
     else:
