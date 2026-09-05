@@ -21,11 +21,11 @@ data "oci_identity_availability_domains" "ads" {
 }
 
 data "oci_core_images" "ubuntu_arm" {
-  compartment_id           = var.compartment_ocid
-  operating_system         = "Canonical Ubuntu"
-  shape                    = "VM.Standard.A1.Flex"
-  sort_by                  = "TIMECREATED"
-  sort_order               = "DESC"
+  compartment_id   = var.compartment_ocid
+  operating_system = "Canonical Ubuntu"
+  shape            = "VM.Standard.A1.Flex"
+  sort_by          = "TIMECREATED"
+  sort_order       = "DESC"
 }
 
 resource "oci_core_vcn" "bsd" {
@@ -76,13 +76,13 @@ resource "oci_core_security_list" "bsd" {
 }
 
 resource "oci_core_subnet" "bsd" {
-  compartment_id    = var.compartment_ocid
-  vcn_id            = oci_core_vcn.bsd.id
-  cidr_block        = "10.20.1.0/24"
-  display_name      = "bsd-workers-public"
-  dns_label         = "bsdpub"
-  route_table_id    = oci_core_route_table.bsd.id
-  security_list_ids = [oci_core_security_list.bsd.id]
+  compartment_id             = var.compartment_ocid
+  vcn_id                     = oci_core_vcn.bsd.id
+  cidr_block                 = "10.20.1.0/24"
+  display_name               = "bsd-workers-public"
+  dns_label                  = "bsdpub"
+  route_table_id             = oci_core_route_table.bsd.id
+  security_list_ids          = [oci_core_security_list.bsd.id]
   prohibit_public_ip_on_vnic = false
 }
 
@@ -105,14 +105,14 @@ resource "oci_core_instance" "bsd_worker" {
   }
 
   source_details {
-    source_type = "image"
-    source_id   = data.oci_core_images.ubuntu_arm.images[0].id
+    source_type             = "image"
+    source_id               = data.oci_core_images.ubuntu_arm.images[0].id
     boot_volume_size_in_gbs = 47
   }
 
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
-    user_data = base64encode(templatefile("${path.module}/cloud-init.yaml.tftpl", {
+    user_data           = base64encode(templatefile("${path.module}/cloud-init.yaml.tftpl", {
       repo_url = var.repo_url
     }))
   }
