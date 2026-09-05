@@ -8,11 +8,11 @@ fi
 
 TASK_B64="$1"
 TASK_JSON="$(printf '%s' "$TASK_B64" | base64 --decode)"
-TASK_ID="$(python3 - <<'PY' "$TASK_JSON"
+TASK_ID="$(python3 - "$TASK_JSON" <<'PY'
 import json, re, sys
-obj=json.loads(sys.argv[1])
-raw=str(obj.get('id','task'))
-print(re.sub(r'[^A-Za-z0-9_.-]+','-',raw)[:80] or 'task')
+obj = json.loads(sys.argv[1])
+raw = str(obj.get('id', 'task'))
+print(re.sub(r'[^A-Za-z0-9_.-]+', '-', raw)[:80] or 'task')
 PY
 )"
 
