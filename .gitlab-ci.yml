@@ -1,0 +1,38 @@
+spec:
+  inputs:
+    workers:
+      type: number
+      default: 1
+      description: "Number of parallel BSD workers (1-30 recommended)"
+    tasks_b64:
+      type: string
+      default: "W3siaWQiOiJzZWxmLXRlc3QiLCJ0eXBlIjoic2VsZl90ZXN0IiwicGFyYW1zIjp7fX1d"
+      description: "Base64-encoded JSON task array"
+---
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "api"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
+    - when: never
+
+stages:
+  - compute
+
+bsd-worker:
+  stage: compute
+  image: sagemath/sagemath:10.9
+  parallel: $[[ inputs.workers ]]
+  variables:
+    BSD_PROVIDER: gitlab
+    BSD_RESULTS_DIR: results
+    BSD_TASKS_B64: "$[[ inputs.tasks_b64 ]]"
+  script:
+    - mkdir -p results
+    - sage -python ci_entrypoint.py
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - results/
