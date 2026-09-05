@@ -22,7 +22,10 @@ stages:
 
 bsd-worker:
   stage: compute
-  image: sagemath/sagemath:10.9
+  timeout: 2h
+  image:
+    name: sagemath/sagemath:10.9
+    entrypoint: [""]
   parallel: $[[ inputs.workers ]]
   variables:
     BSD_PROVIDER: gitlab
