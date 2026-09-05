@@ -1,0 +1,80 @@
+name: BSD workers
+
+on:
+  workflow_dispatch:
+    inputs:
+      tasks_json:
+        description: "JSON array with 1-30 BSD tasks"
+        required: true
+        default: '[{"id":"self-test","type":"self_test","params":{}}]'
+  repository_dispatch:
+    types: [bsd_tasks]
+  push:
+    branches: [main]
+    paths:
+      - worker.py
+      - prepare_matrix.py
+      - .github/workflows/bsd-worker.yml
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare task matrix
+        id: matrix
+        env:
+          MANUAL_TASKS_JSON: ${{ inputs.tasks_json }}
+          DISPATCH_TASKS_JSON: ${{ toJSON(github.event.client_payload.tasks) }}
+        run: python3 prepare_matrix.py
+
+  worker:
+    name: worker-${{ matrix.slot }}-${{ matrix.task_id }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 30
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull SageMath worker image
+        run: docker pull sagemath/sagemath:latest
+
+      - name: Run BSD task
+        env:
+          BSD_TASK_JSON: ${{ toJSON(matrix.task) }}
+          BSD_WORKER_ID: ${{ matrix.slot }}
+          BSD_RESULT_PATH: results/${{ matrix.task_id }}.json
+        run: |
+          mkdir -p results
+          docker run --rm --user 0:0 \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e BSD_TASK_JSON \
+            -e BSD_WORKER_ID \
+            -e BSD_RESULT_PATH \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            sagemath/sagemath:latest \
+            sage -python worker.py
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsd-result-${{ matrix.task_id }}
+          path: results/${{ matrix.task_id }}.json
+          if-no-files-found: error
+          retention-days: 7
