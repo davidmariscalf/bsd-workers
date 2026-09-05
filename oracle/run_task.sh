@@ -25,5 +25,4 @@ export BSD_WORKER_ID="oracle-$(hostname)"
 export BSD_PROVIDER="oracle"
 export BSD_RESULT_PATH="/opt/bsd-results/${TASK_ID}.json"
 
-/opt/sage/bin/sage -python worker.py
-cat "$BSD_RESULT_PATH"
+exec /opt/sage/bin/sage -python worker.py
